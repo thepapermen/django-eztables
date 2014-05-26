@@ -17,7 +17,6 @@ from django.views.generic.list import MultipleObjectMixin
 
 from eztables.forms import DatatablesForm, DESC
 
-
 JSON_MIMETYPE = 'application/json'
 
 RE_FORMATTED = re.compile(r'\{(\w+)\}')
@@ -58,6 +57,7 @@ class DatatablesView(MultipleObjectMixin, View):
     _db_fields = None
     ServerSide = True
     _formatted_fields = False
+    filters = {}
 
     def post(self, request, *args, **kwargs):
         return self.process_dt_response(request.POST)
@@ -70,13 +70,13 @@ class DatatablesView(MultipleObjectMixin, View):
         # 'iColumns' is a needed server-side parameter, if it doesn't exist we
         # can safely switch to client-side.
         if 'iColumns' in data:
+            self.generate_search_sets(data)
             self.form = DatatablesForm(data)
             if not self.form.is_valid():
                 return HttpResponseBadRequest()
         else:
             self.form = None
             self.ServerSide = False
-
         self.qs = self.get_queryset()
         self.set_object_list()
         return self.render_to_response(self.form)
@@ -116,6 +116,48 @@ class DatatablesView(MultipleObjectMixin, View):
             return not isinstance(get_real_field(self.model, field), UNSUPPORTED_REGEX_FIELDS)
         else:
             return True
+
+    def generate_search_sets(self, request):
+        """Generate search sets from DataTables request.
+
+        Search sets are lists of key-value pairs (in tuple format) that define
+        the search space for the column search function and custom filter
+        functions.  These lists are generated from the DataTables HTTP request
+        using the following method:
+
+        * If the request, has an argument that starts with "sSearch_" and whose
+          value is not empty, then we decide on which search set it will be
+          added.
+        * The arguments that are added in the column search set must have as
+          suffix a number that corresponds to a table column.
+        * All other arguments are added in the filter search set.
+
+        Note: The reason why we use the values of the HTTP request instead of
+        the values of form.cleaned_data is because we cannot always know the
+        filter name, i.e. what is followed after "sSearch_", which means that
+        we cannot create a form field for it.
+        """
+        self.column_set = []
+        self.filter_set = {}
+
+        for param, value in request.iteritems():
+            if not param.startswith("sSearch_"):
+                continue
+            if not value:
+                continue
+
+            _, search = param.split("_", 1)
+            try:
+                column_idx = int(search)
+                if column_idx < request['iColumns']:
+                    self.column_set.append((column_idx, value),)
+                else:
+                    self.filter_set[search] = value
+            except ValueError:
+                if '[]' in search:
+                    value = request.getlist(param)
+                    search = search.replace('[]', '')
+                self.filter_set[search] = value
 
     def get_orders(self):
         '''Get ordering fields for ``QuerySet.order_by``'''
@@ -162,25 +204,59 @@ class DatatablesView(MultipleObjectMixin, View):
 
     def column_search(self, queryset):
         '''Filter a queryset with column search'''
-        for idx in xrange(self.dt_data['iColumns']):
-            search = self.dt_data['sSearch_%s' % idx]
-            if search:
-                if hasattr(self, 'search_col_%s' % idx):
-                    custom_search = getattr(self, 'search_col_%s' % idx)
-                    queryset = custom_search(search, queryset)
+        for idx, search in self.column_set:
+            if hasattr(self, 'search_col_%s' % idx):
+                custom_search = getattr(self, 'search_col_%s' % idx)
+                queryset = custom_search(search, queryset)
+            else:
+                field = self.get_field(idx)
+                fields = RE_FORMATTED.findall(field) if RE_FORMATTED.match(field) else [field]
+                if self.dt_data['bRegex_%s' % idx]:
+                    criterions = [Q(**{'%s__iregex' % field: search}) for field in fields if self.can_regex(field)]
+                    if len(criterions) > 0:
+                        search = reduce(or_, criterions)
+                        queryset = queryset.filter(search)
                 else:
-                    field = self.get_field(idx)
-                    fields = RE_FORMATTED.findall(field) if RE_FORMATTED.match(field) else [field]
-                    if self.dt_data['bRegex_%s' % idx]:
-                        criterions = [Q(**{'%s__iregex' % field: search}) for field in fields if self.can_regex(field)]
-                        if len(criterions) > 0:
-                            search = reduce(or_, criterions)
-                            queryset = queryset.filter(search)
-                    else:
-                        for term in search.split():
-                            criterions = (Q(**{'%s__icontains' % field: term}) for field in fields)
-                            search = reduce(or_, criterions)
-                            queryset = queryset.filter(search)
+                    for term in search.split():
+                        criterions = (Q(**{'%s__icontains' % field: term}) for field in fields)
+                        search = reduce(or_, criterions)
+                        queryset = queryset.filter(search)
+        return queryset
+
+    def get_filters(self):
+        if hasattr(self, "_filters"):
+            return
+        if isinstance(self.filters, list):
+            self._filters = {filter.name: filter for filter in self.filters}
+        # We can't check if the provided type is FilterSet, unless we try to
+        # import it, which would not be a clean solution. Therefore, anything
+        # that's not a list, will be stored in self._filters.
+        else:
+            self._filters = self.filters
+
+    def custom_filtering(self, queryset):
+        if not self.filter_set:
+            return queryset
+
+        self.get_filters()
+        # If the following succeeds, then the user has provided as a
+        # django-filter FilterSet and we don't actually need to iterate the
+        # filters.
+        try:
+            return self._filters(data=self.filter_set, queryset=queryset).qs
+        except TypeError:
+            pass
+
+        for attr, query in self.filter_set.iteritems():
+            if hasattr(self, "filter_%s" % attr):
+                custom_filter = getattr(self, "filter_%s" % attr)
+                queryset = custom_filter(queryset, query)
+            else:
+                try:
+                    f = self._filters[attr]
+                    queryset = f.filter(queryset, query)
+                except KeyError:
+                    raise Exception('Unsupported filter: %s' % attr)
         return queryset
 
     def get_queryset(self):
@@ -189,10 +265,13 @@ class DatatablesView(MultipleObjectMixin, View):
         # Bail if we are not in server-side mode
         if not self.ServerSide:
             return qs
+
         # Perform global search
         qs = self.global_search(qs)
         # Perform column search
         qs = self.column_search(qs)
+        # Perform custom filtering
+        qs = self.custom_filtering(qs)
         # Return the ordered queryset
         return qs.order_by(*self.get_orders())
 
