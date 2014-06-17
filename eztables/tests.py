@@ -298,6 +298,36 @@ class DatatablesTestMixin(object):
         self.assertTrue('aaData' in data)
         self.assertEqual(len(data['aaData']), 0)
 
+    def test_empty_noserverside(self):
+        '''Test if we respect bServerSide=false of Datatables.'''
+        response = self.get_response('browsers', {})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'application/json')
+
+        data = json.loads(response.content.decode())
+        self.assertFalse('iTotalRecords' in data)
+        self.assertFalse('iTotalDisplayRecords' in data)
+        self.assertFalse('sEcho' in data)
+        self.assertTrue('aaData' in data)
+        self.assertEqual(len(data['aaData']), 0)
+
+    def test_noserverside(self):
+        '''Test if we respect bServerSide=false of Datatables.'''
+        browsers = [BrowserFactory() for _ in xrange(15)]
+
+        response = self.get_response('browsers', {})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'application/json')
+
+        data = json.loads(response.content.decode())
+        self.assertFalse('iTotalRecords' in data)
+        self.assertFalse('iTotalDisplayRecords' in data)
+        self.assertFalse('sEcho' in data)
+        self.assertTrue('aaData' in data)
+        self.assertEqual(len(data['aaData']), len(browsers))
+        for row in data['aaData']:
+            self.assertInstance(row)
+
     def test_unpaginated(self):
         '''Should return an unpaginated Datatables JSON response'''
         browsers = [BrowserFactory() for _ in xrange(5)]
