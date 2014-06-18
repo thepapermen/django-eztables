@@ -10,7 +10,7 @@ from django.core.serializers.json import DjangoJSONEncoder
 from django.db import models
 from django.db.models import Q
 from django.http import HttpResponse, HttpResponseBadRequest
-from django.utils.six import text_type
+from django.utils.six import text_type, iteritems
 from django.utils.six.moves import reduce, xrange
 from django.views.generic import View
 from django.views.generic.list import MultipleObjectMixin
@@ -57,6 +57,7 @@ class DatatablesView(MultipleObjectMixin, View):
     fields = []
     _db_fields = None
     ServerSide = True
+    _formatted_fields = False
 
     def post(self, request, *args, **kwargs):
         return self.process_dt_response(request.POST)
@@ -92,6 +93,7 @@ class DatatablesView(MultipleObjectMixin, View):
             fields = self.fields.values() if isinstance(self.fields, dict) else self.fields
             for field in fields:
                 if RE_FORMATTED.match(field):
+                    self._formatted_fields = True
                     self._db_fields.extend(RE_FORMATTED.findall(field))
                 else:
                     self._db_fields.append(field)
@@ -204,21 +206,33 @@ class DatatablesView(MultipleObjectMixin, View):
 
     def get_rows(self, rows):
         '''Format all rows'''
-        return [self.get_row(row) for row in rows]
+        if self._formatted_fields:
+            return [self.get_row(row) for row in rows]
+        else:
+            if isinstance(self.fields, dict):
+                return [dict((key, row[value])
+                             for key, value in iteritems(self.fields))
+                        for row in rows]
+            else:
+                return list(rows)
 
     def get_row(self, row):
         '''Format a single row (if necessary)'''
 
         if isinstance(self.fields, dict):
-            return dict([
-                (key, text_type(value).format(**row) if RE_FORMATTED.match(value) else row[value])
-                for key, value in self.fields.items()
-            ])
+            return dict((key, text_type(value).format(**row)
+                         if RE_FORMATTED.match(value) else row[value])
+                        for key, value in self.fields.items())
         else:
             row = dict(zip(self._db_fields, row))
             return [text_type(field).format(**row) if RE_FORMATTED.match(field)
                     else row[field]
                     for field in self.fields]
+
+    def format_data_rows(self, rows):
+        if hasattr(self, 'format_data_row'):
+            rows = [self.format_data_row(row) for row in rows]
+        return rows
 
     def get_extra_data(self, extra_object_list):
         """Map user-defined function on extra object list.
@@ -250,13 +264,13 @@ class DatatablesView(MultipleObjectMixin, View):
                 'iTotalRecords': data_page.paginator.count,
                 'iTotalDisplayRecords': data_page.paginator.count,
                 'sEcho': form.cleaned_data['sEcho'],
-                'aaData': self.get_rows(data_page.object_list),
+                'aaData': self.format_data_rows(data_rows),
             }
         else:
             data_rows = self.get_rows(self.object_list)
             extra_object_list = self.qs
             data = {
-                'aaData': self.get_rows(self.object_list),
+                'aaData': self.format_data_rows(data_rows),
             }
         self.add_extra_data(data, extra_object_list)
         return self.json_response(data)
