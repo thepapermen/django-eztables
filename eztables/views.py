@@ -76,7 +76,8 @@ class DatatablesView(MultipleObjectMixin, View):
             self.form = None
             self.ServerSide = False
 
-        self.object_list = self.get_queryset().values(*self.get_db_fields())
+        self.qs = self.get_queryset()
+        self.object_list = self.qs.values(*self.get_db_fields())
         return self.render_to_response(self.form)
 
     def get_db_fields(self):
@@ -187,11 +188,11 @@ class DatatablesView(MultipleObjectMixin, View):
         # Return the ordered queryset
         return qs.order_by(*self.get_orders())
 
-    def get_page(self, form):
+    def get_page(self, form, object_list):
         '''Get the requested page'''
         page_size = form.cleaned_data['iDisplayLength']
         start_index = form.cleaned_data['iDisplayStart']
-        paginator = Paginator(self.object_list, page_size)
+        paginator = Paginator(object_list, page_size)
         num_page = (start_index / page_size) + 1
         return paginator.page(num_page)
 
@@ -212,20 +213,45 @@ class DatatablesView(MultipleObjectMixin, View):
                     else row[field]
                     for field in self.fields]
 
+    def get_extra_data(self, extra_object_list):
+        """Map user-defined function on extra object list.
+
+        If the user has not defined a `get_extra_data_row` method, then this
+        method has no effect.
+        """
+        if hasattr(self, 'get_extra_data_row'):
+            return map(self.get_extra_data_row, extra_object_list)
+
+    def add_extra_data(self, data, extra_object_list):
+        """Add an 'extra' dictionary to the returned JSON.
+
+        By default, no extra data will be added to the returned JSON, unless
+        the user has specified a `get_extra_data_row` method or has overriden
+        the existing `get_extra_data` method.
+        """
+        extra_data = self.get_extra_data(extra_object_list)
+        if extra_data:
+            data['extra'] = extra_data
+
     def render_to_response(self, form, **kwargs):
         '''Render Datatables expected JSON format'''
         if self.ServerSide and form.cleaned_data['iDisplayLength'] > 0:
-            page = self.get_page(form)
+            data_page = self.get_page(form, self.object_list)
+            data_rows = self.get_rows(data_page.object_list)
+            extra_object_list = self.get_page(form, self.qs).object_list
             data = {
-                'iTotalRecords': page.paginator.count,
-                'iTotalDisplayRecords': page.paginator.count,
+                'iTotalRecords': data_page.paginator.count,
+                'iTotalDisplayRecords': data_page.paginator.count,
                 'sEcho': form.cleaned_data['sEcho'],
-                'aaData': self.get_rows(page.object_list),
+                'aaData': self.get_rows(data_page.object_list),
             }
         else:
+            data_rows = self.get_rows(self.object_list)
+            extra_object_list = self.qs
             data = {
-                'aaData': self.get_rows(self.object_list)
+                'aaData': self.get_rows(self.object_list),
             }
+        self.add_extra_data(data, extra_object_list)
         return self.json_response(data)
 
     def json_response(self, data):
