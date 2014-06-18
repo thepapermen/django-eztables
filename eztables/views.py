@@ -77,8 +77,14 @@ class DatatablesView(MultipleObjectMixin, View):
             self.ServerSide = False
 
         self.qs = self.get_queryset()
-        self.object_list = self.qs.values(*self.get_db_fields())
+        self.set_object_list()
         return self.render_to_response(self.form)
+
+    def set_object_list(self):
+        if isinstance(self.fields, dict):
+            self.object_list = self.qs.values(*self.get_db_fields())
+        else:
+            self.object_list = self.qs.values_list(*self.get_db_fields())
 
     def get_db_fields(self):
         if not self._db_fields:
@@ -209,6 +215,7 @@ class DatatablesView(MultipleObjectMixin, View):
                 for key, value in self.fields.items()
             ])
         else:
+            row = dict(zip(self._db_fields, row))
             return [text_type(field).format(**row) if RE_FORMATTED.match(field)
                     else row[field]
                     for field in self.fields]
