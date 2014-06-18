@@ -15,7 +15,33 @@ from factory import DjangoModelFactory, SubFactory, Sequence
 from eztables.forms import DatatablesForm
 from eztables.views import RE_FORMATTED
 from eztables.demo.models import Browser, Engine, SpecialCase
-from eztables.demo.views import SpecialCaseDatatablesView
+from eztables.demo.views import (SpecialCaseDatatablesView,
+                                 BrowserDatatablesView,
+                                 ObjectBrowserDatatablesView)
+
+
+class ExtraBrowserDatatablesViewAll(BrowserDatatablesView):
+
+    def get_extra_data(self, qs):
+        return qs.count()
+
+
+class ExtraBrowserDatatablesViewRow(BrowserDatatablesView):
+
+    def get_extra_data_row(self, inst):
+        return inst.engine.version
+
+
+class ExtraObjectBrowserDatatablesViewAll(ObjectBrowserDatatablesView):
+
+    def get_extra_data(self, qs):
+        return qs.count()
+
+
+class ExtraObjectBrowserDatatablesViewRow(ObjectBrowserDatatablesView):
+
+    def get_extra_data_row(self, inst):
+        return inst.engine.version
 
 
 class EngineFactory(DjangoModelFactory):
@@ -328,7 +354,9 @@ class DatatablesTestMixin(object):
         for row in data['aaData']:
             self.assertInstance(row)
 
-    def test_unpaginated(self):
+    # TODO: Add unpaginated test
+
+    def test_singlepage(self):
         '''Should return an unpaginated Datatables JSON response'''
         browsers = [BrowserFactory() for _ in xrange(5)]
 
@@ -641,6 +669,80 @@ class DatatablesTestMixin(object):
             response = self.get_response('special', self.build_query_special(**params))
             data = json.loads(response.content.decode())
             self.assertEqual(len(data['aaData']), 3 if field in UNSUPPORTED_LOOKUP_FIELDS else 0)
+
+    def test_extra_singlepage(self):
+        '''Should return an unpaginated Datatables JSON response'''
+        browsers = [BrowserFactory() for _ in xrange(5)]
+
+        response = self.get_response('extra_row', self.build_query())
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'application/json')
+
+        data = json.loads(response.content.decode())
+        self.assertTrue('iTotalRecords' in data)
+        self.assertEqual(data['iTotalRecords'], len(browsers))
+        self.assertTrue('iTotalDisplayRecords' in data)
+        self.assertEqual(data['iTotalDisplayRecords'], len(browsers))
+        self.assertTrue('sEcho' in data)
+        self.assertEqual(data['sEcho'], '1')
+        self.assertTrue('aaData' in data)
+        self.assertEqual(len(data['aaData']), len(browsers))
+        for row in data['aaData']:
+            self.assertInstance(row)
+        self.assertTrue('extra' in data)
+        self.assertEqual(len(data['extra']), len(browsers))
+        for row, browser in zip(data['extra'], browsers):
+            if not row:
+                break
+            self.assertEqual(str(row), str(browser.engine.version))
+
+    def test_extra_paginated(self):
+        '''Should return a paginated Datatables JSON response'''
+        browsers = [BrowserFactory() for _ in xrange(15)]
+
+        response = self.get_response('extra_row', self.build_query())
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'application/json')
+
+        data = json.loads(response.content.decode())
+        self.assertTrue('iTotalRecords' in data)
+        self.assertEqual(data['iTotalRecords'], len(browsers))
+        self.assertTrue('iTotalDisplayRecords' in data)
+        self.assertEqual(data['iTotalDisplayRecords'], len(browsers))
+        self.assertTrue('sEcho' in data)
+        self.assertEqual(data['sEcho'], '1')
+        self.assertTrue('aaData' in data)
+        self.assertEqual(len(data['aaData']), 10)
+        for row in data['aaData']:
+            self.assertInstance(row)
+        self.assertTrue('extra' in data)
+        self.assertEqual(len(data['extra']), 10)
+        for row, browser in zip(data['extra'], browsers):
+            if not row:
+                break
+            self.assertEqual(str(row), str(browser.engine.version))
+
+    def test_extra_all(self):
+        '''Should return a paginated Datatables JSON response'''
+        browsers = [BrowserFactory() for _ in xrange(15)]
+
+        response = self.get_response('extra', self.build_query())
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'application/json')
+
+        data = json.loads(response.content.decode())
+        self.assertTrue('iTotalRecords' in data)
+        self.assertEqual(data['iTotalRecords'], len(browsers))
+        self.assertTrue('iTotalDisplayRecords' in data)
+        self.assertEqual(data['iTotalDisplayRecords'], len(browsers))
+        self.assertTrue('sEcho' in data)
+        self.assertEqual(data['sEcho'], '1')
+        self.assertTrue('aaData' in data)
+        self.assertEqual(len(data['aaData']), 10)
+        for row in data['aaData']:
+            self.assertInstance(row)
+        self.assertTrue('extra' in data)
+        self.assertEqual(data['extra'], 10)
 
 
 class ArrayMixin(object):

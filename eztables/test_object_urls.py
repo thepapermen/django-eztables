@@ -6,10 +6,18 @@ from eztables.demo.views import (
     CustomObjectBrowserDatatablesView,
     SpecialCaseDatatablesView,
 )
+from eztables.tests import (
+    ExtraObjectBrowserDatatablesViewAll,
+    ExtraObjectBrowserDatatablesViewRow,
+)
 
 urlpatterns = patterns('',
     url(r'^$', ObjectBrowserDatatablesView.as_view(), name='browsers'),
     url(r'^formatted/$', FormattedObjectBrowserDatatablesView.as_view(), name='formatted-browsers'),
     url(r'^custom/$', CustomObjectBrowserDatatablesView.as_view(), name='custom-browsers'),
     url(r'^special/$', SpecialCaseDatatablesView.as_view(), name='special'),
+    url(r'^extra/$', ExtraObjectBrowserDatatablesViewAll.as_view(),
+        name='extra'),
+    url(r'^extra_row/$', ExtraObjectBrowserDatatablesViewRow.as_view(),
+        name='extra_row'),
 )
