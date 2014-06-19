@@ -9,7 +9,9 @@ from django.core.urlresolvers import reverse
 from django.test import TestCase
 from django.utils import unittest
 
-from django.utils.six import iteritems
+from django.db.models import Q
+
+from django.utils.six import iteritems, itervalues
 from django.utils.six.moves import xrange
 from factory import DjangoModelFactory, SubFactory, Sequence
 
@@ -49,6 +51,20 @@ class ExtraObjectBrowserDatatablesViewRow(ObjectBrowserDatatablesView):
 
     def get_extra_data_row(self, inst):
         return inst.engine.version
+
+
+class UserFormatRowBrowserDatatablesView(BrowserDatatablesView):
+
+    def format_data_row(self, row):
+        return [str(value).upper() for value in row]
+
+
+class UserFormatRowObjectBrowserDatatablesView(ObjectBrowserDatatablesView):
+
+    def format_data_row(self, row):
+        for key, value in iteritems(row):
+            row[key] = str(value).upper()
+        return row
 
 
 class EngineFactory(DjangoModelFactory):
@@ -751,6 +767,26 @@ class DatatablesTestMixin(object):
         self.assertTrue('extra' in data)
         self.assertEqual(data['extra'], 10)
 
+    def test_user_format_row(self):
+        '''Should return a user-formatted Datatables JSON response'''
+        browsers = [BrowserFactory() for _ in xrange(5)]
+
+        response = self.get_response('format_row', self.build_query())
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'application/json')
+
+        data = json.loads(response.content.decode())
+        self.assertTrue('iTotalRecords' in data)
+        self.assertEqual(data['iTotalRecords'], len(browsers))
+        self.assertTrue('iTotalDisplayRecords' in data)
+        self.assertEqual(data['iTotalDisplayRecords'], len(browsers))
+        self.assertTrue('sEcho' in data)
+        self.assertEqual(data['sEcho'], '1')
+        self.assertTrue('aaData' in data)
+        self.assertEqual(len(data['aaData']), len(browsers))
+        for row, browser in zip(data['aaData'], browsers):
+            self.assertInstance(row)
+            self.assertRowUpper(row)
 
 class ArrayMixin(object):
     urls = patterns('',
@@ -761,6 +797,9 @@ class ArrayMixin(object):
         url(r'^extra/$', ExtraBrowserDatatablesViewAll.as_view(), name='extra'),
         url(r'^extra_row/$', ExtraBrowserDatatablesViewRow.as_view(),
             name='extra_row'),
+        url(r'^format_row/$', UserFormatRowBrowserDatatablesView.as_view(),
+            name='format_row'),
+
     )
 
     def value(self, row, field_id):
@@ -769,6 +808,11 @@ class ArrayMixin(object):
     def assertInstance(self, row):
         self.assertTrue(isinstance(row, list))
         self.assertEqual(len(row), 6)
+
+    def assertRowUpper(self, row):
+        for value in row:
+            if not value.isdigit():
+                self.assertTrue(value.isupper())
 
 
 class ObjectMixin(object):
@@ -780,6 +824,8 @@ class ObjectMixin(object):
         url(r'^extra/$', ExtraObjectBrowserDatatablesViewAll.as_view(), name='extra'),
         url(r'^extra_row/$', ExtraObjectBrowserDatatablesViewRow.as_view(),
             name='extra_row'),
+        url(r'^format_row/$', UserFormatRowObjectBrowserDatatablesView.as_view(),
+            name='format_row'),
     )
 
     id_to_name = {
@@ -805,6 +851,11 @@ class ObjectMixin(object):
         self.assertTrue(isinstance(row, dict))
         for key in self.id_to_name.values():
             self.assertTrue(key in row)
+
+    def assertRowUpper(self, row):
+        for value in itervalues(row):
+            if not value.isdigit():
+                self.assertTrue(value.isupper())
 
 
 class GetMixin(object):
