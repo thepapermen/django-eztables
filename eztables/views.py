@@ -56,6 +56,7 @@ class DatatablesView(MultipleObjectMixin, View):
     '''
     fields = []
     _db_fields = None
+    ServerSide = True
 
     def post(self, request, *args, **kwargs):
         return self.process_dt_response(request.POST)
@@ -64,12 +65,19 @@ class DatatablesView(MultipleObjectMixin, View):
         return self.process_dt_response(request.GET)
 
     def process_dt_response(self, data):
-        self.form = DatatablesForm(data)
-        if self.form.is_valid():
-            self.object_list = self.get_queryset().values(*self.get_db_fields())
-            return self.render_to_response(self.form)
+        # Switch between server-side and client-side mode. Given that
+        # 'iColumns' is a needed server-side parameter, if it doesn't exist we
+        # can safely switch to client-side.
+        if 'iColumns' in data:
+            self.form = DatatablesForm(data)
+            if not self.form.is_valid():
+                return HttpResponseBadRequest()
         else:
-            return HttpResponseBadRequest()
+            self.form = None
+            self.ServerSide = False
+
+        self.object_list = self.get_queryset().values(*self.get_db_fields())
+        return self.render_to_response(self.form)
 
     def get_db_fields(self):
         if not self._db_fields:
@@ -169,6 +177,9 @@ class DatatablesView(MultipleObjectMixin, View):
     def get_queryset(self):
         '''Apply Datatables sort and search criterion to QuerySet'''
         qs = super(DatatablesView, self).get_queryset()
+        # Bail if we are not in server-side mode
+        if not self.ServerSide:
+            return qs
         # Perform global search
         qs = self.global_search(qs)
         # Perform column search
@@ -203,13 +214,18 @@ class DatatablesView(MultipleObjectMixin, View):
 
     def render_to_response(self, form, **kwargs):
         '''Render Datatables expected JSON format'''
-        page = self.get_page(form)
-        data = {
-            'iTotalRecords': page.paginator.count,
-            'iTotalDisplayRecords': page.paginator.count,
-            'sEcho': form.cleaned_data['sEcho'],
-            'aaData': self.get_rows(page.object_list),
-        }
+        if self.ServerSide and form.cleaned_data['iDisplayLength'] > 0:
+            page = self.get_page(form)
+            data = {
+                'iTotalRecords': page.paginator.count,
+                'iTotalDisplayRecords': page.paginator.count,
+                'sEcho': form.cleaned_data['sEcho'],
+                'aaData': self.get_rows(page.object_list),
+            }
+        else:
+            data = {
+                'aaData': self.get_rows(self.object_list)
+            }
         return self.json_response(data)
 
     def json_response(self, data):
