@@ -9,6 +9,8 @@ from django.core.urlresolvers import reverse
 from django.test import TestCase
 from django.utils import unittest
 
+from django.db.models import Q
+
 from django.utils.six import iteritems
 from django.utils.six.moves import xrange
 from factory import DjangoModelFactory, SubFactory, Sequence
@@ -25,6 +27,134 @@ from eztables.demo.views import (
     CustomObjectBrowserDatatablesView,
     SpecialCaseDatatablesView,
 )
+
+
+class ExtraBrowserDatatablesViewAll(BrowserDatatablesView):
+
+    def get_extra_data(self, qs):
+        return qs.count()
+
+
+class ExtraBrowserDatatablesViewRow(BrowserDatatablesView):
+
+    def get_extra_data_row(self, inst):
+        return inst.engine.version
+
+
+class ExtraObjectBrowserDatatablesViewAll(ObjectBrowserDatatablesView):
+
+    def get_extra_data(self, qs):
+        return qs.count()
+
+
+class ExtraObjectBrowserDatatablesViewRow(ObjectBrowserDatatablesView):
+
+    def get_extra_data_row(self, inst):
+        return inst.engine.version
+
+
+class UserFormatRowBrowserDatatablesView(BrowserDatatablesView):
+
+    def format_data_row(self, row):
+        return [str(value).upper() for value in row]
+
+
+class UserFormatRowObjectBrowserDatatablesView(ObjectBrowserDatatablesView):
+
+    def format_data_row(self, row):
+        for key, value in row.iteritems():
+            row[key] = str(value).upper()
+        return row
+
+
+def filter_byid(qs, query):
+    q = Q()
+    for value in query:
+        q |= Q(pk=value)
+    return qs.filter(q)
+
+
+class MockFilter():
+    def __init__(self, name, f):
+        self.name = name
+        self.f = f
+
+    def filter(self, qs, query):
+        return self.f(qs, query)
+
+
+class MockFilterSet():
+
+    filterset = {'browserid': filter_byid}
+
+    def __init__(self, data, queryset):
+        self.data = data
+        self.queryset = queryset
+
+    @property
+    def qs(self):
+        for key, query in self.data.iteritems():
+            return self.filterset[key](self.queryset, query)
+
+
+filter_browserid = MockFilter('browserid', filter_byid)
+
+class FilterFunctionView():
+
+    def filter_browserid(self, qs, query):
+        return filter_byid(qs, query)
+
+
+class FilterListView():
+
+    filters = [filter_browserid]
+
+
+class FilterDictView():
+
+    filters = {'browserid': filter_browserid}
+
+
+class FilterSetView():
+
+    filters = MockFilterSet
+
+
+class FilterFunctionBrowserDatatablesView(FilterFunctionView,
+                                          BrowserDatatablesView):
+    pass
+
+
+class FilterListBrowserDatatablesView(FilterListView, BrowserDatatablesView):
+    pass
+
+
+class FilterDictBrowserDatatablesView(FilterDictView, BrowserDatatablesView):
+    pass
+
+
+class FilterSetBrowserDatatablesView(FilterSetView, BrowserDatatablesView):
+    pass
+
+
+class FilterFunctionObjectBrowserDatatablesView(FilterFunctionView,
+                                                ObjectBrowserDatatablesView):
+    pass
+
+
+class FilterListObjectBrowserDatatablesView(FilterListView,
+                                            ObjectBrowserDatatablesView):
+    pass
+
+
+class FilterDictObjectBrowserDatatablesView(FilterDictView,
+                                            ObjectBrowserDatatablesView):
+    pass
+
+
+class FilterSetObjectBrowserDatatablesView(FilterSetView,
+                                           ObjectBrowserDatatablesView):
+    pass
 
 
 class EngineFactory(DjangoModelFactory):
@@ -307,7 +437,39 @@ class DatatablesTestMixin(object):
         self.assertTrue('aaData' in data)
         self.assertEqual(len(data['aaData']), 0)
 
-    def test_unpaginated(self):
+    def test_empty_noserverside(self):
+        '''Test if we respect bServerSide=false of Datatables.'''
+        response = self.get_response('browsers', {})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'application/json')
+
+        data = json.loads(response.content.decode())
+        self.assertFalse('iTotalRecords' in data)
+        self.assertFalse('iTotalDisplayRecords' in data)
+        self.assertFalse('sEcho' in data)
+        self.assertTrue('aaData' in data)
+        self.assertEqual(len(data['aaData']), 0)
+
+    def test_noserverside(self):
+        '''Test if we respect bServerSide=false of Datatables.'''
+        browsers = [BrowserFactory() for _ in xrange(15)]
+
+        response = self.get_response('browsers', {})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'application/json')
+
+        data = json.loads(response.content.decode())
+        self.assertFalse('iTotalRecords' in data)
+        self.assertFalse('iTotalDisplayRecords' in data)
+        self.assertFalse('sEcho' in data)
+        self.assertTrue('aaData' in data)
+        self.assertEqual(len(data['aaData']), len(browsers))
+        for row in data['aaData']:
+            self.assertInstance(row)
+
+    # TODO: Add unpaginated test
+
+    def test_singlepage(self):
         '''Should return an unpaginated Datatables JSON response'''
         browsers = [BrowserFactory() for _ in xrange(5)]
 
@@ -621,6 +783,136 @@ class DatatablesTestMixin(object):
             data = json.loads(response.content.decode())
             self.assertEqual(len(data['aaData']), 3 if field in UNSUPPORTED_LOOKUP_FIELDS else 0)
 
+    def test_extra_singlepage(self):
+        '''Should return an unpaginated Datatables JSON response'''
+        browsers = [BrowserFactory() for _ in xrange(5)]
+
+        response = self.get_response('extra_row', self.build_query())
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'application/json')
+
+        data = json.loads(response.content.decode())
+        self.assertTrue('iTotalRecords' in data)
+        self.assertEqual(data['iTotalRecords'], len(browsers))
+        self.assertTrue('iTotalDisplayRecords' in data)
+        self.assertEqual(data['iTotalDisplayRecords'], len(browsers))
+        self.assertTrue('sEcho' in data)
+        self.assertEqual(data['sEcho'], '1')
+        self.assertTrue('aaData' in data)
+        self.assertEqual(len(data['aaData']), len(browsers))
+        for row in data['aaData']:
+            self.assertInstance(row)
+        self.assertTrue('extra' in data)
+        self.assertEqual(len(data['extra']), len(browsers))
+        for row, browser in zip(data['extra'], browsers):
+            if not row:
+                break
+            self.assertEqual(str(row), str(browser.engine.version))
+
+    def test_extra_paginated(self):
+        '''Should return a paginated Datatables JSON response'''
+        browsers = [BrowserFactory() for _ in xrange(15)]
+
+        response = self.get_response('extra_row', self.build_query())
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'application/json')
+
+        data = json.loads(response.content.decode())
+        self.assertTrue('iTotalRecords' in data)
+        self.assertEqual(data['iTotalRecords'], len(browsers))
+        self.assertTrue('iTotalDisplayRecords' in data)
+        self.assertEqual(data['iTotalDisplayRecords'], len(browsers))
+        self.assertTrue('sEcho' in data)
+        self.assertEqual(data['sEcho'], '1')
+        self.assertTrue('aaData' in data)
+        self.assertEqual(len(data['aaData']), 10)
+        for row in data['aaData']:
+            self.assertInstance(row)
+        self.assertTrue('extra' in data)
+        self.assertEqual(len(data['extra']), 10)
+        for row, browser in zip(data['extra'], browsers):
+            if not row:
+                break
+            self.assertEqual(str(row), str(browser.engine.version))
+
+    def test_extra_all(self):
+        '''Should return a paginated Datatables JSON response'''
+        browsers = [BrowserFactory() for _ in xrange(15)]
+
+        response = self.get_response('extra', self.build_query())
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'application/json')
+
+        data = json.loads(response.content.decode())
+        self.assertTrue('iTotalRecords' in data)
+        self.assertEqual(data['iTotalRecords'], len(browsers))
+        self.assertTrue('iTotalDisplayRecords' in data)
+        self.assertEqual(data['iTotalDisplayRecords'], len(browsers))
+        self.assertTrue('sEcho' in data)
+        self.assertEqual(data['sEcho'], '1')
+        self.assertTrue('aaData' in data)
+        self.assertEqual(len(data['aaData']), 10)
+        for row in data['aaData']:
+            self.assertInstance(row)
+        self.assertTrue('extra' in data)
+        self.assertEqual(data['extra'], 10)
+
+
+    def test_user_format_row(self):
+        '''Should return a user-formatted Datatables JSON response'''
+        browsers = [BrowserFactory() for _ in xrange(5)]
+
+        response = self.get_response('format_row', self.build_query())
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'application/json')
+
+        data = json.loads(response.content.decode())
+        self.assertTrue('iTotalRecords' in data)
+        self.assertEqual(data['iTotalRecords'], len(browsers))
+        self.assertTrue('iTotalDisplayRecords' in data)
+        self.assertEqual(data['iTotalDisplayRecords'], len(browsers))
+        self.assertTrue('sEcho' in data)
+        self.assertEqual(data['sEcho'], '1')
+        self.assertTrue('aaData' in data)
+        self.assertEqual(len(data['aaData']), len(browsers))
+        for row, browser in zip(data['aaData'], browsers):
+            self.assertInstance(row)
+            self.assertRowUpper(row)
+
+    def filter_tests_helper(self, view):
+        '''Should return a paginated Datatables JSON response'''
+        browsers = [BrowserFactory() for _ in xrange(15)]
+        ids = [1, 2]
+
+        response = self.get_response(
+            view, self.build_query(**{'sSearch_browserid[]': ids}))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'application/json')
+
+        data = json.loads(response.content.decode())
+        self.assertTrue('iTotalRecords' in data)
+        self.assertEqual(data['iTotalRecords'], len(ids))
+        self.assertTrue('iTotalDisplayRecords' in data)
+        self.assertEqual(data['iTotalDisplayRecords'], len(ids))
+        self.assertTrue('sEcho' in data)
+        self.assertEqual(data['sEcho'], '1')
+        self.assertTrue('aaData' in data)
+        self.assertEqual(len(data['aaData']), len(ids))
+        for row in data['aaData']:
+            self.assertInstance(row)
+
+    def test_filter_function(self):
+        self.filter_tests_helper('filter_function')
+
+    def test_filter_list(self):
+        self.filter_tests_helper('filter_list')
+
+    def test_filter_dict(self):
+        self.filter_tests_helper('filter_dict')
+
+    def test_filter_set(self):
+        self.filter_tests_helper('filter_set')
+
 
 class ArrayMixin(object):
     urls = patterns('',
@@ -628,6 +920,19 @@ class ArrayMixin(object):
         url(r'^formatted/$', FormattedBrowserDatatablesView.as_view(), name='formatted-browsers'),
         url(r'^custom/$', CustomBrowserDatatablesView.as_view(), name='custom-browsers'),
         url(r'^special/$', SpecialCaseDatatablesView.as_view(), name='special'),
+        url(r'^extra/$', ExtraBrowserDatatablesViewAll.as_view(), name='extra'),
+        url(r'^extra_row/$', ExtraBrowserDatatablesViewRow.as_view(),
+            name='extra_row'),
+        url(r'^format_row/$', UserFormatRowBrowserDatatablesView.as_view(),
+            name='format_row'),
+        url(r'^filter_function/$', FilterFunctionBrowserDatatablesView.as_view(),
+            name='filter_function'),
+        url(r'^filter_list/$', FilterListBrowserDatatablesView.as_view(),
+            name='filter_list'),
+        url(r'^filter_dict/$', FilterDictBrowserDatatablesView.as_view(),
+            name='filter_dict'),
+        url(r'^filter_set/$', FilterSetBrowserDatatablesView.as_view(),
+            name='filter_set'),
     )
 
     def value(self, row, field_id):
@@ -637,6 +942,11 @@ class ArrayMixin(object):
         self.assertTrue(isinstance(row, list))
         self.assertEqual(len(row), 6)
 
+    def assertRowUpper(self, row):
+        for value in row:
+            if not value.isdigit():
+                self.assertTrue(value.isupper())
+
 
 class ObjectMixin(object):
     urls = patterns('',
@@ -644,6 +954,20 @@ class ObjectMixin(object):
         url(r'^formatted/$', FormattedObjectBrowserDatatablesView.as_view(), name='formatted-browsers'),
         url(r'^custom/$', CustomObjectBrowserDatatablesView.as_view(), name='custom-browsers'),
         url(r'^special/$', SpecialCaseDatatablesView.as_view(), name='special'),
+        url(r'^extra/$', ExtraObjectBrowserDatatablesViewAll.as_view(), name='extra'),
+        url(r'^extra_row/$', ExtraObjectBrowserDatatablesViewRow.as_view(),
+            name='extra_row'),
+        url(r'^format_row/$', UserFormatRowObjectBrowserDatatablesView.as_view(),
+            name='format_row'),
+        url(r'^filter_function/$',
+            FilterFunctionObjectBrowserDatatablesView.as_view(),
+            name='filter_function'),
+        url(r'^filter_list/$', FilterListObjectBrowserDatatablesView.as_view(),
+            name='filter_list'),
+        url(r'^filter_dict/$', FilterDictObjectBrowserDatatablesView.as_view(),
+            name='filter_dict'),
+        url(r'^filter_set/$', FilterSetObjectBrowserDatatablesView.as_view(),
+            name='filter_set'),
     )
 
     id_to_name = {
@@ -669,6 +993,11 @@ class ObjectMixin(object):
         self.assertTrue(isinstance(row, dict))
         for key in self.id_to_name.values():
             self.assertTrue(key in row)
+
+    def assertRowUpper(self, row):
+        for value in row.itervalues():
+            if not value.isdigit():
+                self.assertTrue(value.isupper())
 
 
 class GetMixin(object):

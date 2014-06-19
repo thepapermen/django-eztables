@@ -17,7 +17,6 @@ from django.views.generic.list import MultipleObjectMixin
 
 from eztables.forms import DatatablesForm, DESC
 
-
 JSON_MIMETYPE = 'application/json'
 
 RE_FORMATTED = re.compile(r'\{(\w+)\}')
@@ -56,6 +55,9 @@ class DatatablesView(MultipleObjectMixin, View):
     '''
     fields = []
     _db_fields = None
+    ServerSide = True
+    _formatted_fields = False
+    filters = {}
 
     def post(self, request, *args, **kwargs):
         return self.process_dt_response(request.POST)
@@ -64,12 +66,26 @@ class DatatablesView(MultipleObjectMixin, View):
         return self.process_dt_response(request.GET)
 
     def process_dt_response(self, data):
-        self.form = DatatablesForm(data)
-        if self.form.is_valid():
-            self.object_list = self.get_queryset().values(*self.get_db_fields())
-            return self.render_to_response(self.form)
+        # Switch between server-side and client-side mode. Given that
+        # 'iColumns' is a needed server-side parameter, if it doesn't exist we
+        # can safely switch to client-side.
+        if 'iColumns' in data:
+            self.generate_search_sets(data)
+            self.form = DatatablesForm(data)
+            if not self.form.is_valid():
+                return HttpResponseBadRequest()
         else:
-            return HttpResponseBadRequest()
+            self.form = None
+            self.ServerSide = False
+        self.qs = self.get_queryset()
+        self.set_object_list()
+        return self.render_to_response(self.form)
+
+    def set_object_list(self):
+        if isinstance(self.fields, dict):
+            self.object_list = self.qs.values(*self.get_db_fields())
+        else:
+            self.object_list = self.qs.values_list(*self.get_db_fields())
 
     def get_db_fields(self):
         if not self._db_fields:
@@ -77,6 +93,7 @@ class DatatablesView(MultipleObjectMixin, View):
             fields = self.fields.values() if isinstance(self.fields, dict) else self.fields
             for field in fields:
                 if RE_FORMATTED.match(field):
+                    self._formatted_fields = True
                     self._db_fields.extend(RE_FORMATTED.findall(field))
                 else:
                     self._db_fields.append(field)
@@ -99,6 +116,48 @@ class DatatablesView(MultipleObjectMixin, View):
             return not isinstance(get_real_field(self.model, field), UNSUPPORTED_REGEX_FIELDS)
         else:
             return True
+
+    def generate_search_sets(self, request):
+        """Generate search sets from DataTables request.
+
+        Search sets are lists of key-value pairs (in tuple format) that define
+        the search space for the column search function and custom filter
+        functions.  These lists are generated from the DataTables HTTP request
+        using the following method:
+
+        * If the request, has an argument that starts with "sSearch_" and whose
+          value is not empty, then we decide on which search set it will be
+          added.
+        * The arguments that are added in the column search set must have as
+          suffix a number that corresponds to a table column.
+        * All other arguments are added in the filter search set.
+
+        Note: The reason why we use the values of the HTTP request instead of
+        the values of form.cleaned_data is because we cannot always know the
+        filter name, i.e. what is followed after "sSearch_", which means that
+        we cannot create a form field for it.
+        """
+        self.column_set = []
+        self.filter_set = {}
+
+        for param, value in request.iteritems():
+            if not param.startswith("sSearch_"):
+                continue
+            if not value:
+                continue
+
+            _, search = param.split("_", 1)
+            try:
+                column_idx = int(search)
+                if column_idx < request['iColumns']:
+                    self.column_set.append((column_idx, value),)
+                else:
+                    self.filter_set[search] = value
+            except ValueError:
+                if '[]' in search:
+                    value = request.getlist(param)
+                    search = search.replace('[]', '')
+                self.filter_set[search] = value
 
     def get_orders(self):
         '''Get ordering fields for ``QuerySet.order_by``'''
@@ -145,71 +204,154 @@ class DatatablesView(MultipleObjectMixin, View):
 
     def column_search(self, queryset):
         '''Filter a queryset with column search'''
-        for idx in xrange(self.dt_data['iColumns']):
-            search = self.dt_data['sSearch_%s' % idx]
-            if search:
-                if hasattr(self, 'search_col_%s' % idx):
-                    custom_search = getattr(self, 'search_col_%s' % idx)
-                    queryset = custom_search(search, queryset)
+        for idx, search in self.column_set:
+            if hasattr(self, 'search_col_%s' % idx):
+                custom_search = getattr(self, 'search_col_%s' % idx)
+                queryset = custom_search(search, queryset)
+            else:
+                field = self.get_field(idx)
+                fields = RE_FORMATTED.findall(field) if RE_FORMATTED.match(field) else [field]
+                if self.dt_data['bRegex_%s' % idx]:
+                    criterions = [Q(**{'%s__iregex' % field: search}) for field in fields if self.can_regex(field)]
+                    if len(criterions) > 0:
+                        search = reduce(or_, criterions)
+                        queryset = queryset.filter(search)
                 else:
-                    field = self.get_field(idx)
-                    fields = RE_FORMATTED.findall(field) if RE_FORMATTED.match(field) else [field]
-                    if self.dt_data['bRegex_%s' % idx]:
-                        criterions = [Q(**{'%s__iregex' % field: search}) for field in fields if self.can_regex(field)]
-                        if len(criterions) > 0:
-                            search = reduce(or_, criterions)
-                            queryset = queryset.filter(search)
-                    else:
-                        for term in search.split():
-                            criterions = (Q(**{'%s__icontains' % field: term}) for field in fields)
-                            search = reduce(or_, criterions)
-                            queryset = queryset.filter(search)
+                    for term in search.split():
+                        criterions = (Q(**{'%s__icontains' % field: term}) for field in fields)
+                        search = reduce(or_, criterions)
+                        queryset = queryset.filter(search)
+        return queryset
+
+    def get_filters(self):
+        if hasattr(self, "_filters"):
+            return
+        if isinstance(self.filters, list):
+            self._filters = {filter.name: filter for filter in self.filters}
+        # We can't check if the provided type is FilterSet, unless we try to
+        # import it, which would not be a clean solution. Therefore, anything
+        # that's not a list, will be stored in self._filters.
+        else:
+            self._filters = self.filters
+
+    def custom_filtering(self, queryset):
+        if not self.filter_set:
+            return queryset
+
+        self.get_filters()
+        # If the following succeeds, then the user has provided as a
+        # django-filter FilterSet and we don't actually need to iterate the
+        # filters.
+        try:
+            return self._filters(data=self.filter_set, queryset=queryset).qs
+        except TypeError:
+            pass
+
+        for attr, query in self.filter_set.iteritems():
+            if hasattr(self, "filter_%s" % attr):
+                custom_filter = getattr(self, "filter_%s" % attr)
+                queryset = custom_filter(queryset, query)
+            else:
+                try:
+                    f = self._filters[attr]
+                    queryset = f.filter(queryset, query)
+                except KeyError:
+                    raise Exception('Unsupported filter: %s' % attr)
         return queryset
 
     def get_queryset(self):
         '''Apply Datatables sort and search criterion to QuerySet'''
         qs = super(DatatablesView, self).get_queryset()
+        # Bail if we are not in server-side mode
+        if not self.ServerSide:
+            return qs
+
         # Perform global search
         qs = self.global_search(qs)
         # Perform column search
         qs = self.column_search(qs)
+        # Perform custom filtering
+        qs = self.custom_filtering(qs)
         # Return the ordered queryset
         return qs.order_by(*self.get_orders())
 
-    def get_page(self, form):
+    def get_page(self, form, object_list):
         '''Get the requested page'''
         page_size = form.cleaned_data['iDisplayLength']
         start_index = form.cleaned_data['iDisplayStart']
-        paginator = Paginator(self.object_list, page_size)
+        paginator = Paginator(object_list, page_size)
         num_page = (start_index / page_size) + 1
         return paginator.page(num_page)
 
     def get_rows(self, rows):
         '''Format all rows'''
-        return [self.get_row(row) for row in rows]
+        if self._formatted_fields:
+            return map(self.get_row, rows)
+        else:
+            if isinstance(self.fields, dict):
+                return [{key: row[value]
+                         for key, value in self.fields.iteritems()}
+                        for row in rows]
+            else:
+                return list(rows)
 
     def get_row(self, row):
         '''Format a single row (if necessary)'''
 
         if isinstance(self.fields, dict):
-            return dict([
-                (key, text_type(value).format(**row) if RE_FORMATTED.match(value) else row[value])
-                for key, value in self.fields.items()
-            ])
+            return {key: text_type(value).format(**row)
+                    if RE_FORMATTED.match(value) else row[value]
+                    for key, value in self.fields.items()}
         else:
+            row = dict(zip(self._db_fields, row))
             return [text_type(field).format(**row) if RE_FORMATTED.match(field)
                     else row[field]
                     for field in self.fields]
 
+    def format_data_rows(self, rows):
+        if hasattr(self, 'format_data_row'):
+            rows = map(self.format_data_row, rows)
+        return rows
+
+    def get_extra_data(self, extra_object_list):
+        """Map user-defined function on extra object list.
+
+        If the user has not defined a `get_extra_data_row` method, then this
+        method has no effect.
+        """
+        if hasattr(self, 'get_extra_data_row'):
+            return map(self.get_extra_data_row, extra_object_list)
+
+    def add_extra_data(self, data, extra_object_list):
+        """Add an 'extra' dictionary to the returned JSON.
+
+        By default, no extra data will be added to the returned JSON, unless
+        the user has specified a `get_extra_data_row` method or has overriden
+        the existing `get_extra_data` method.
+        """
+        extra_data = self.get_extra_data(extra_object_list)
+        if extra_data:
+            data['extra'] = extra_data
+
     def render_to_response(self, form, **kwargs):
         '''Render Datatables expected JSON format'''
-        page = self.get_page(form)
-        data = {
-            'iTotalRecords': page.paginator.count,
-            'iTotalDisplayRecords': page.paginator.count,
-            'sEcho': form.cleaned_data['sEcho'],
-            'aaData': self.get_rows(page.object_list),
-        }
+        if self.ServerSide and form.cleaned_data['iDisplayLength'] > 0:
+            data_page = self.get_page(form, self.object_list)
+            data_rows = self.get_rows(data_page.object_list)
+            extra_object_list = self.get_page(form, self.qs).object_list
+            data = {
+                'iTotalRecords': data_page.paginator.count,
+                'iTotalDisplayRecords': data_page.paginator.count,
+                'sEcho': form.cleaned_data['sEcho'],
+                'aaData': self.format_data_rows(data_rows),
+            }
+        else:
+            data_rows = self.get_rows(self.object_list)
+            extra_object_list = self.qs
+            data = {
+                'aaData': self.format_data_rows(data_rows),
+            }
+        self.add_extra_data(data, extra_object_list)
         return self.json_response(data)
 
     def json_response(self, data):
