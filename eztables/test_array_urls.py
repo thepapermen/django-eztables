@@ -10,6 +10,10 @@ from eztables.tests import (
     ExtraBrowserDatatablesViewAll,
     ExtraBrowserDatatablesViewRow,
     UserFormatRowBrowserDatatablesView,
+    FilterFunctionBrowserDatatablesView,
+    FilterListBrowserDatatablesView,
+    FilterDictBrowserDatatablesView,
+    FilterSetBrowserDatatablesView,
 )
 
 
@@ -23,4 +27,12 @@ urlpatterns = patterns('',
         name='extra_row'),
     url(r'^format_row/$', UserFormatRowBrowserDatatablesView.as_view(),
         name='format_row'),
+    url(r'^filter_function/$', FilterFunctionBrowserDatatablesView.as_view(),
+        name='filter_function'),
+    url(r'^filter_list/$', FilterListBrowserDatatablesView.as_view(),
+        name='filter_list'),
+    url(r'^filter_dict/$', FilterDictBrowserDatatablesView.as_view(),
+        name='filter_dict'),
+    url(r'^filter_set/$', FilterSetBrowserDatatablesView.as_view(),
+        name='filter_set'),
 )

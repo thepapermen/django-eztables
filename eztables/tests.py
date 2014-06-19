@@ -60,6 +60,97 @@ class UserFormatRowObjectBrowserDatatablesView(ObjectBrowserDatatablesView):
         return row
 
 
+def filter_byid(qs, query):
+    q = Q()
+    for value in query:
+        q |= Q(pk=value)
+    return qs.filter(q)
+
+
+class MockFilter():
+    def __init__(self, name, f):
+        self.name = name
+        self.f = f
+
+    def filter(self, qs, query):
+        return self.f(qs, query)
+
+
+class MockFilterSet():
+
+    filterset = {'browserid': filter_byid}
+
+    def __init__(self, data, queryset):
+        self.data = data
+        self.queryset = queryset
+
+    @property
+    def qs(self):
+        for key, query in iteritems(self.data):
+            return self.filterset[key](self.queryset, query)
+
+
+filter_browserid = MockFilter('browserid', filter_byid)
+
+
+class FilterFunctionView():
+
+    def filter_browserid(self, qs, query):
+        return filter_byid(qs, query)
+
+
+class FilterListView():
+
+    filters = [filter_browserid]
+
+
+class FilterDictView():
+
+    filters = {'browserid': filter_browserid}
+
+
+class FilterSetView():
+
+    filters = MockFilterSet
+
+
+class FilterFunctionBrowserDatatablesView(FilterFunctionView,
+                                          BrowserDatatablesView):
+    pass
+
+
+class FilterListBrowserDatatablesView(FilterListView, BrowserDatatablesView):
+    pass
+
+
+class FilterDictBrowserDatatablesView(FilterDictView, BrowserDatatablesView):
+    pass
+
+
+class FilterSetBrowserDatatablesView(FilterSetView, BrowserDatatablesView):
+    pass
+
+
+class FilterFunctionObjectBrowserDatatablesView(FilterFunctionView,
+                                                ObjectBrowserDatatablesView):
+    pass
+
+
+class FilterListObjectBrowserDatatablesView(FilterListView,
+                                            ObjectBrowserDatatablesView):
+    pass
+
+
+class FilterDictObjectBrowserDatatablesView(FilterDictView,
+                                            ObjectBrowserDatatablesView):
+    pass
+
+
+class FilterSetObjectBrowserDatatablesView(FilterSetView,
+                                           ObjectBrowserDatatablesView):
+    pass
+
+
 class EngineFactory(DjangoModelFactory):
     FACTORY_FOR = Engine
     name = random.choice(('Gecko', 'Webkit', 'Presto'))
@@ -780,6 +871,41 @@ class DatatablesTestMixin(object):
         for row, browser in zip(data['aaData'], browsers):
             self.assertInstance(row)
             self.assertRowUpper(row)
+
+    def filter_tests_helper(self, view):
+        '''Should return a paginated Datatables JSON response'''
+        browsers = [BrowserFactory() for _ in xrange(15)]
+        ids = [1, 2]
+
+        response = self.get_response(
+            view, self.build_query(**{'sSearch_browserid[]': ids}))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'application/json')
+
+        data = json.loads(response.content.decode())
+        self.assertTrue('iTotalRecords' in data)
+        self.assertEqual(data['iTotalRecords'], len(ids))
+        self.assertTrue('iTotalDisplayRecords' in data)
+        self.assertEqual(data['iTotalDisplayRecords'], len(ids))
+        self.assertTrue('sEcho' in data)
+        self.assertEqual(data['sEcho'], '1')
+        self.assertTrue('aaData' in data)
+        self.assertEqual(len(data['aaData']), len(ids))
+        for row in data['aaData']:
+            self.assertInstance(row)
+
+    def test_filter_function(self):
+        self.filter_tests_helper('filter_function')
+
+    def test_filter_list(self):
+        self.filter_tests_helper('filter_list')
+
+    def test_filter_dict(self):
+        self.filter_tests_helper('filter_dict')
+
+    def test_filter_set(self):
+        self.filter_tests_helper('filter_set')
+
 
 class ArrayMixin(object):
     urls = 'eztables.test_array_urls'
