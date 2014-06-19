@@ -9,6 +9,8 @@ from django.core.urlresolvers import reverse
 from django.test import TestCase
 from django.utils import unittest
 
+from django.db.models import Q
+
 from django.utils.six import iteritems
 from django.utils.six.moves import xrange
 from factory import DjangoModelFactory, SubFactory, Sequence
@@ -63,6 +65,96 @@ class UserFormatRowObjectBrowserDatatablesView(ObjectBrowserDatatablesView):
         for key, value in row.iteritems():
             row[key] = str(value).upper()
         return row
+
+
+def filter_byid(qs, query):
+    q = Q()
+    for value in query:
+        q |= Q(pk=value)
+    return qs.filter(q)
+
+
+class MockFilter():
+    def __init__(self, name, f):
+        self.name = name
+        self.f = f
+
+    def filter(self, qs, query):
+        return self.f(qs, query)
+
+
+class MockFilterSet():
+
+    filterset = {'browserid': filter_byid}
+
+    def __init__(self, data, queryset):
+        self.data = data
+        self.queryset = queryset
+
+    @property
+    def qs(self):
+        for key, query in self.data.iteritems():
+            return self.filterset[key](self.queryset, query)
+
+
+filter_browserid = MockFilter('browserid', filter_byid)
+
+class FilterFunctionView():
+
+    def filter_browserid(self, qs, query):
+        return filter_byid(qs, query)
+
+
+class FilterListView():
+
+    filters = [filter_browserid]
+
+
+class FilterDictView():
+
+    filters = {'browserid': filter_browserid}
+
+
+class FilterSetView():
+
+    filters = MockFilterSet
+
+
+class FilterFunctionBrowserDatatablesView(FilterFunctionView,
+                                          BrowserDatatablesView):
+    pass
+
+
+class FilterListBrowserDatatablesView(FilterListView, BrowserDatatablesView):
+    pass
+
+
+class FilterDictBrowserDatatablesView(FilterDictView, BrowserDatatablesView):
+    pass
+
+
+class FilterSetBrowserDatatablesView(FilterSetView, BrowserDatatablesView):
+    pass
+
+
+class FilterFunctionObjectBrowserDatatablesView(FilterFunctionView,
+                                                ObjectBrowserDatatablesView):
+    pass
+
+
+class FilterListObjectBrowserDatatablesView(FilterListView,
+                                            ObjectBrowserDatatablesView):
+    pass
+
+
+class FilterDictObjectBrowserDatatablesView(FilterDictView,
+                                            ObjectBrowserDatatablesView):
+    pass
+
+
+class FilterSetObjectBrowserDatatablesView(FilterSetView,
+                                           ObjectBrowserDatatablesView):
+    pass
 
 
 class EngineFactory(DjangoModelFactory):
@@ -787,6 +879,41 @@ class DatatablesTestMixin(object):
             self.assertInstance(row)
             self.assertRowUpper(row)
 
+    def filter_tests_helper(self, view):
+        '''Should return a paginated Datatables JSON response'''
+        browsers = [BrowserFactory() for _ in xrange(15)]
+        ids = [1, 2]
+
+        response = self.get_response(
+            view, self.build_query(**{'sSearch_browserid[]': ids}))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'application/json')
+
+        data = json.loads(response.content.decode())
+        self.assertTrue('iTotalRecords' in data)
+        self.assertEqual(data['iTotalRecords'], len(ids))
+        self.assertTrue('iTotalDisplayRecords' in data)
+        self.assertEqual(data['iTotalDisplayRecords'], len(ids))
+        self.assertTrue('sEcho' in data)
+        self.assertEqual(data['sEcho'], '1')
+        self.assertTrue('aaData' in data)
+        self.assertEqual(len(data['aaData']), len(ids))
+        for row in data['aaData']:
+            self.assertInstance(row)
+
+    def test_filter_function(self):
+        self.filter_tests_helper('filter_function')
+
+    def test_filter_list(self):
+        self.filter_tests_helper('filter_list')
+
+    def test_filter_dict(self):
+        self.filter_tests_helper('filter_dict')
+
+    def test_filter_set(self):
+        self.filter_tests_helper('filter_set')
+
+
 class ArrayMixin(object):
     urls = patterns('',
         url(r'^$', BrowserDatatablesView.as_view(), name='browsers'),
@@ -798,7 +925,14 @@ class ArrayMixin(object):
             name='extra_row'),
         url(r'^format_row/$', UserFormatRowBrowserDatatablesView.as_view(),
             name='format_row'),
-
+        url(r'^filter_function/$', FilterFunctionBrowserDatatablesView.as_view(),
+            name='filter_function'),
+        url(r'^filter_list/$', FilterListBrowserDatatablesView.as_view(),
+            name='filter_list'),
+        url(r'^filter_dict/$', FilterDictBrowserDatatablesView.as_view(),
+            name='filter_dict'),
+        url(r'^filter_set/$', FilterSetBrowserDatatablesView.as_view(),
+            name='filter_set'),
     )
 
     def value(self, row, field_id):
@@ -825,6 +959,15 @@ class ObjectMixin(object):
             name='extra_row'),
         url(r'^format_row/$', UserFormatRowObjectBrowserDatatablesView.as_view(),
             name='format_row'),
+        url(r'^filter_function/$',
+            FilterFunctionObjectBrowserDatatablesView.as_view(),
+            name='filter_function'),
+        url(r'^filter_list/$', FilterListObjectBrowserDatatablesView.as_view(),
+            name='filter_list'),
+        url(r'^filter_dict/$', FilterDictObjectBrowserDatatablesView.as_view(),
+            name='filter_dict'),
+        url(r'^filter_set/$', FilterSetObjectBrowserDatatablesView.as_view(),
+            name='filter_set'),
     )
 
     id_to_name = {
