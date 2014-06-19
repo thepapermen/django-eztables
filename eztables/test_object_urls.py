@@ -9,6 +9,7 @@ from eztables.demo.views import (
 from eztables.tests import (
     ExtraObjectBrowserDatatablesViewAll,
     ExtraObjectBrowserDatatablesViewRow,
+    UserFormatRowObjectBrowserDatatablesView,
 )
 
 urlpatterns = patterns('',
@@ -20,4 +21,6 @@ urlpatterns = patterns('',
         name='extra'),
     url(r'^extra_row/$', ExtraObjectBrowserDatatablesViewRow.as_view(),
         name='extra_row'),
+    url(r'^format_row/$', UserFormatRowObjectBrowserDatatablesView.as_view(),
+        name='format_row'),
 )
