@@ -915,6 +915,7 @@ class DatatablesTestMixin(object):
 
 
 class ArrayMixin(object):
+
     urls = patterns('',
         url(r'^$', BrowserDatatablesView.as_view(), name='browsers'),
         url(r'^formatted/$', FormattedBrowserDatatablesView.as_view(), name='formatted-browsers'),
@@ -934,6 +935,12 @@ class ArrayMixin(object):
         url(r'^filter_set/$', FilterSetBrowserDatatablesView.as_view(),
             name='filter_set'),
     )
+
+    class MockUrlConf(object):
+        def __init__(self, patterns):
+            self.urlpatterns = patterns
+
+    urlconfclass = MockUrlConf(urls)
 
     def value(self, row, field_id):
         return row[field_id]
@@ -970,6 +977,12 @@ class ObjectMixin(object):
             name='filter_set'),
     )
 
+    class MockUrlConf(object):
+        def __init__(self, patterns):
+            self.urlpatterns = patterns
+
+    urlconfclass = MockUrlConf(urls)
+
     id_to_name = {
         0: 'engine',
         1: 'name',
@@ -1002,12 +1015,12 @@ class ObjectMixin(object):
 
 class GetMixin(object):
     def get_response(self, name, data={}):
-        return self.client.get(reverse(name), data)
+        return self.client.get(reverse(name, self.urlconfclass), data)
 
 
 class PostMixin(object):
     def get_response(self, name, data={}):
-        return self.client.post(reverse(name), data)
+        return self.client.get(reverse(name, self.urlconfclass), data)
 
 
 class DatatablesArrayGetTest(ArrayMixin, GetMixin, DatatablesTestMixin, TestCase):
