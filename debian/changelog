@@ -1,3 +1,9 @@
+django-eztables (0.3.3-1~snf~0.2) UNRELEASED; urgency=low
+
+  * Remove django.js requirement.
+
+ -- root <root@snf-22984>  Mon, 07 Jul 2014 15:53:35 +0300
+
 django-eztables (0.3.3-1~snf~wheezy) wheezy; urgency=low
 
   * New upstream version 
