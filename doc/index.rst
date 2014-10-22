@@ -44,10 +44,12 @@ Features
 ========
 
 - Datatables.net, plugins and localization integration with Django.
-- Server-side processing with a simple view supporting:
+- Easy switch between Server-side processing and Client-side proecessing, with
+  a simple view supporting:
     - sorting (single and multi columns)
-    - filtering with regex support (global and by column)
+    - filtering with regex support (custom, global and by column)
     - formatting using format pattern
+    - context data for each row (not using the DataTables API)
 - Deferred loading support.
 - Twitter Bootstrap integration.
 
@@ -75,6 +77,7 @@ Documentation
 
     templatetags
     serverside
+    clientside
     localization
     integration
     api
