@@ -59,6 +59,10 @@ class DatatablesView(MultipleObjectMixin, View):
     _formatted_fields = False
     filters = {}
 
+    @classmethod
+    def get_fields(cls):
+        return cls.fields
+
     def post(self, request, *args, **kwargs):
         return self.process_dt_response(request.POST)
 
@@ -82,7 +86,7 @@ class DatatablesView(MultipleObjectMixin, View):
         return self.render_to_response(self.form)
 
     def set_object_list(self):
-        if isinstance(self.fields, dict):
+        if isinstance(self.get_fields(), dict):
             self.object_list = self.qs.values(*self.get_db_fields())
         else:
             self.object_list = self.qs.values_list(*self.get_db_fields())
@@ -90,7 +94,7 @@ class DatatablesView(MultipleObjectMixin, View):
     def get_db_fields(self):
         if not self._db_fields:
             self._db_fields = []
-            fields = self.fields.values() if isinstance(self.fields, dict) else self.fields
+            fields = self.get_fields().values() if isinstance(self.get_fields(), dict) else self.get_fields()
             for field in fields:
                 if RE_FORMATTED.match(field):
                     self._formatted_fields = True
@@ -104,10 +108,10 @@ class DatatablesView(MultipleObjectMixin, View):
         return self.form.cleaned_data
 
     def get_field(self, index):
-        if isinstance(self.fields, dict):
-            return self.fields[self.dt_data['mDataProp_%s' % index]]
+        if isinstance(self.get_fields(), dict):
+            return self.get_fields()[self.dt_data['mDataProp_%s' % index]]
         else:
-            return self.fields[index]
+            return self.get_fields()[index]
 
     def can_regex(self, field):
         '''Test if a given field supports regex lookups'''
@@ -288,9 +292,9 @@ class DatatablesView(MultipleObjectMixin, View):
         if self._formatted_fields:
             return [self.get_row(row) for row in rows]
         else:
-            if isinstance(self.fields, dict):
+            if isinstance(self.get_fields(), dict):
                 return [dict((key, row[value])
-                             for key, value in iteritems(self.fields))
+                             for key, value in iteritems(self.get_fields()))
                         for row in rows]
             else:
                 return list(rows)
@@ -298,15 +302,15 @@ class DatatablesView(MultipleObjectMixin, View):
     def get_row(self, row):
         '''Format a single row (if necessary)'''
 
-        if isinstance(self.fields, dict):
+        if isinstance(self.get_fields(), dict):
             return dict((key, text_type(value).format(**row)
                          if RE_FORMATTED.match(value) else row[value])
-                        for key, value in self.fields.items())
+                        for key, value in self.get_fields().items())
         else:
             row = dict(zip(self._db_fields, row))
             return [text_type(field).format(**row) if RE_FORMATTED.match(field)
                     else row[field]
-                    for field in self.fields]
+                    for field in self.get_fields()]
 
     def format_data_rows(self, rows):
         if hasattr(self, 'format_data_row'):
